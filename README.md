@@ -1,10 +1,10 @@
-# Booksidian
+# Livres
 
 Every book you want to read, at a glance.
 
-![Booksidian](docs/shelf.png)
+![Livres](docs/shelf.png)
 
-Booksidian turns the books in your Obsidian vault into a 3D shelf you can browse. Every book stays an ordinary note: the shelf only reads and writes its properties.
+Livres (French for “books”) turns the books in your Obsidian vault into a 3D shelf you can browse. Every book stays an ordinary note: the shelf only reads and writes its properties.
 
 - **Browse**: books stand on their spines. Scroll with the mouse wheel, the trackpad or the arrow keys, or drag the shelf.
 - **Open a book**: click once to pull it out and see its cover. Click again to open it, and its page shows why you want to read it, its summary, themes, tropes, related books, and the notes you wrote about it.
@@ -46,13 +46,13 @@ Notes that link to a book, and notes in a folder named after it, show up on its 
 
 ## Network use
 
-Booksidian connects to Open Library (openlibrary.org and covers.openlibrary.org) to search for books, fetch their details when you add one, and download their covers. Covers are cached in the plugin's folder, so the shelf works offline once they are loaded. No account, no tracking, nothing sent anywhere else.
+Livres connects to Open Library (openlibrary.org and covers.openlibrary.org) to search for books, fetch their details when you add one, and download their covers. Covers are cached in the plugin's folder, so the shelf works offline once they are loaded. No account, no tracking, nothing sent anywhere else.
 
 ## Installation
 
-In Obsidian: **Settings → Community plugins → Browse**, then search for *Booksidian*.
+In Obsidian: **Settings → Community plugins → Browse**, then search for *Livres*.
 
-Manually: download `main.js`, `manifest.json` and `styles.css` from the [latest release](../../releases/latest) into `<your vault>/.obsidian/plugins/booksidian/`, then enable the plugin.
+Manually: download `main.js`, `manifest.json` and `styles.css` from the [latest release](../../releases/latest) into `<your vault>/.obsidian/plugins/livres/`, then enable the plugin.
 
 Desktop only for now.
 

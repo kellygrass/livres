@@ -1,4 +1,4 @@
-/* Booksidian (l'étagère) : une liste de lecture qu'on parcourt comme une vraie étagère.
+/* Livres (l'étagère) : une liste de lecture qu'on parcourt comme une vraie étagère.
    Le plugin ouvre une vue plein onglet qui ne ressemble pas à Obsidian ; les livres, eux, restent
    des notes ordinaires du vault (voir livres.ts). */
 import { App, ItemView, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, debounce, getLanguage, sanitizeHTMLToDom } from 'obsidian';
@@ -12,13 +12,13 @@ let LANG = OBSIDIAN, FR = LANG === 'fr';
 import { mountShelf } from './etagere.js';
 import type { Book, NewBook } from './types';
 
-const VIEW = 'booksidian-view';
+const VIEW = 'livres-view';
 
 class ShelfView extends ItemView {
   private ui: { destroy(): void } | null = null;
   constructor(leaf: WorkspaceLeaf, private plugin: EtagerePlugin) { super(leaf); }
   getViewType() { return VIEW; }
-  getDisplayText() { return 'Booksidian'; }
+  getDisplayText() { return 'Livres'; }
   getIcon() { return 'library'; }
 
   async onOpen() {
@@ -41,8 +41,8 @@ class ShelfView extends ItemView {
       open: (path: string) => ws.openLinkText(path, '', 'tab'),
       openName: (name: string) => ws.openLinkText(name, '', 'tab'),
       listen: (t, type, fn, o) => this.registerDomEvent(t, type, fn, o),
-      load: (k: string) => { const v: unknown = this.app.loadLocalStorage('booksidian-' + k); return typeof v === 'string' ? v : null; },
-      save: (k: string, v: string) => this.app.saveLocalStorage('booksidian-' + k, v),
+      load: (k: string) => { const v: unknown = this.app.loadLocalStorage('livres-' + k); return typeof v === 'string' ? v : null; },
+      save: (k: string, v: string) => this.app.saveLocalStorage('livres-' + k, v),
       active: () => ws.getActiveViewOfType(ShelfView) === this,
       onChange: (fn: () => void) => { this.plugin.changeFns.add(fn); return () => this.plugin.changeFns.delete(fn); },
     });
@@ -60,7 +60,7 @@ export default class EtagerePlugin extends Plugin {
     LANG = this.settings.langue || OBSIDIAN; FR = LANG === 'fr';
     this.livres = new Livres(this.app, this.settings, this.manifest.dir ?? '', LANG);
     this.registerView(VIEW, leaf => new ShelfView(leaf, this));
-    this.addRibbonIcon('library', FR ? 'Ouvrir Booksidian' : 'Open Booksidian', () => this.show());
+    this.addRibbonIcon('library', FR ? 'Ouvrir Livres' : 'Open Livres', () => this.show());
     this.addCommand({ id: 'open', name: FR ? 'Ouvrir l’étagère' : 'Open the bookshelf', callback: () => this.show() });
     this.addSettingTab(new Reglages(this.app, this));
 
