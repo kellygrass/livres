@@ -1,7 +1,7 @@
 {
   "id": "livres",
   "name": "Livres",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.8.7",
   "description": "Browse your reading list as a 3D bookshelf: books to read, books you're reading, books you've read, and what you wrote about them.",
   "author": "Kelly Grass",

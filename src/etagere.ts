@@ -3,25 +3,40 @@
    prend : il monte vers nous, s'ouvre, et on entre dans sa page de garde, qui devient la fiche.
    Tout ce qui touche au vault passe par `host` (main.ts, livres.ts) : ici, seulement le geste. */
 
-import { words, TROPE_HINTS } from './i18n.js';
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const rad = d => d * Math.PI / 180;
-const wait = ms => new Promise(r => window.setTimeout(r, ms));
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+import { words, TROPE_HINTS, type Status } from './i18n';
+import type { Book, Card, NewBook, OLDoc, ShelfHost } from './types';
+
+type RGB = number[];
+interface Palette { spine: RGB; bg: RGB }
+// un livre sur l'étagère : sa note, plus ce qu'on a tiré de sa couverture
+interface ShelfBook extends Book { src?: string; pal?: Palette; ratio?: number; cards?: Card[] }
+// un livre posé sur l'étagère, avec sa place et son mouvement
+interface Entry { el: HTMLElement; W: number; H: number; T: number; b: ShelfBook; pull: number; pullTarget: number; pv?: number; coverOn: boolean; ly: number; lv: number; hover?: boolean }
+interface Spring { v: number; vel: number; to: number; k: number; c: number; step(dt: number): void; rest(eps: number): boolean }
+interface Waiter { cond: () => boolean; res: () => void }
+
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const rad = (d: number) => d * Math.PI / 180;
+const wait = (ms: number) => new Promise<void>(r => window.setTimeout(r, ms));
+const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+const text = (s: unknown) => typeof s === 'string' ? s : typeof s === 'number' ? String(s) : '';
+const esc = (s: unknown) => text(s).replace(/[&<>"]/g, c => ESC[c]);
+// l'élément le plus proche qui correspond, depuis la cible d'un événement
+const closest = (t: EventTarget | null, sel: string) => t instanceof Element ? t.closest<HTMLElement>(sel) : null;
+const fold = (s: unknown) => text(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 // un nombre stable par livre, pour que chaque tranche garde sa hauteur et son épaisseur
-const seed = (s, k) => { let h = 2166136261 ^ k; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
+const seed = (s: string, k: number) => { let h = 2166136261 ^ k; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
 
 /* ---------- Couleurs tirées de la couverture ---------- */
-const lum = ([r, g, b]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-const hex = ([r, g, b]) => '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
-const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
-function palette(img) {
-  const c = document.createElement('canvas'), w = 40, h = 60;
+const lum = ([r, g, b]: RGB) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+const hex = ([r, g, b]: RGB) => '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+const mix = (a: RGB, b: RGB, t: number) => a.map((v, i) => v + (b[i] - v) * t);
+function palette(img: HTMLImageElement): Palette {
+  const c = createEl('canvas'), w = 40, h = 60;
   c.width = w; c.height = h;
   const x = c.getContext('2d', { willReadFrequently: true });
   x.drawImage(img, 0, 0, w, h);
-  const px = x.getImageData(0, 0, w, h).data, bins = new Map();
+  const px = x.getImageData(0, 0, w, h).data, bins = new Map<number, { n: number; r: number; g: number; b: number }>();
   for (let i = 0; i < px.length; i += 4) {
     const r = px[i], g = px[i + 1], b = px[i + 2];
     const k = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3);
@@ -30,7 +45,7 @@ function palette(img) {
   }
   // les nuances proches sont regroupées : sinon un grand aplat se découpe en dizaines de nuances
   // et perd face à un petit détail d'une seule couleur
-  const groups = [], total = w * h;
+  const groups: { rgb: RGB; n: number; share?: number; sat?: number; l?: number }[] = [], total = w * h;
   for (const e of [...bins.values()].sort((a, b) => b.n - a.n)) {
     const rgb = [e.r / e.n, e.g / e.n, e.b / e.n];
     const near = groups.find(g => Math.hypot(g.rgb[0] - rgb[0], g.rgb[1] - rgb[1], g.rgb[2] - rgb[2]) < 34);
@@ -58,10 +73,10 @@ function palette(img) {
 /* ---------- Les genres ---------- */
 // les filtres : la non-fiction regroupe tout ce qui n'est ni fantasy ni science-fiction
 const GENRES = ['non-fiction', 'fantasy', 'science-fiction'];
-const imaginary = b => (b.genres || []).some(g => g === 'fantasy' || g === 'science-fiction');
+const imaginary = (b: Book) => (b.genres || []).some(g => g === 'fantasy' || g === 'science-fiction');
 // le genre d'un livre ajouté, deviné à partir des sujets d'Open Library
-function inferGenres(subjects) {
-  const s = subjects.join(' | ').toLowerCase(), g = new Set();
+function inferGenres(subjects: string[]): string[] {
+  const s = subjects.join(' | ').toLowerCase(), g = new Set<string>();
   const fic = /(?<!non[\s-]?)fiction|novel|roman\b|fantasy|fantastique|fairy tales/.test(s);
   if (/fantasy|fantastique|magic|dragons|wizards/.test(s)) g.add('fantasy');
   if (/science fiction|science-fiction|space opera|dystopi|cyberpunk/.test(s)) g.add('science-fiction');
@@ -72,7 +87,7 @@ function inferGenres(subjects) {
   return [fic || g.has('fantasy') || g.has('science-fiction') ? 'fiction' : 'non-fiction', ...g];
 }
 
-const skeleton = W => `
+const skeleton = (W: ReturnType<typeof words>) => `
   <header class="top">
     <nav class="tabs" role="tablist">
       <button class="tab" data-shelf="a lire" role="tab">${W.shelves['a lire']} <span class="count"></span></button>
@@ -107,27 +122,26 @@ const skeleton = W => `
   </section>
   <div class="toast"></div>`;
 
-export function mountShelf(root, host) {
+export function mountShelf(root: HTMLElement, host: ShelfHost): { destroy(): void } {
   const W = words(host.lang);
-  // le HTML de l'interface passe toujours par un analyseur, qui en fait des nœuds :
-  // dans Obsidian, sanitizeHTMLToDom (host.html) ; ailleurs, DOMParser
-  const dom = host.html || (h => { const f = document.createDocumentFragment(); f.append(...new DOMParser().parseFromString(h, 'text/html').body.childNodes); return f; });
+  // le HTML de l'interface passe toujours par sanitizeHTMLToDom (host.html), qui en fait des nœuds
+  const dom = (h: string) => host.html(h);
   root.replaceChildren(dom(skeleton(W)));
-  const $ = s => root.querySelector(s);
+  const $ = <T extends HTMLElement = HTMLElement>(s: string) => root.querySelector<T>(s);
   const shelfEl = $('.shelf'), stage = $('.stage'), caption = $('.caption'), detail = $('.detail');
   const genresEl = $('.genres');
-  let books = [], alive = true;
+  let books: ShelfBook[] = [], alive = true;
   // une taille et une position dans l'onglet, pas dans la fenêtre
   const vw = () => root.clientWidth, vh = () => root.clientHeight;
   const box = () => root.getBoundingClientRect();
 
   /* ---------- Construire une étagère ---------- */
-  let shelf = 'a lire', list = [], els = [], f = 0, target = 0, vel = 0, lastFocus = -1;
+  let shelf = 'a lire', list: ShelfBook[] = [], els: Entry[] = [], f = 0, target = 0, vel = 0, lastFocus = -1, unit = 36;
   let baseH = 360;
   let genre = 'tout';
   genre = host.load('genre') || 'tout'; shelf = host.load('shelf') || 'a lire';
-  const onShelf = b => b.lecture === shelf;
-  const inGenre = (b, g = genre) => g === 'tout' || (g === 'non-fiction' ? !imaginary(b) : (b.genres || []).includes(g));
+  const onShelf = (b: Book) => b.lecture === shelf;
+  const inGenre = (b: Book, g = genre) => g === 'tout' || (g === 'non-fiction' ? !imaginary(b) : (b.genres || []).includes(g));
 
   function measure() {
     baseH = Math.max(200, Math.min(vh() * 0.44, 400));
@@ -135,7 +149,7 @@ export function mountShelf(root, host) {
   }
   // l'écart entre deux livres
   const gap = () => 3;
-  function geometry(b) {
+  function geometry(b: ShelfBook) {
     const k = baseH / 380, H = baseH * (0.84 + seed(b.id, 1) * 0.16);
     // l'épaisseur suit le nombre de pages : 150 pages ≈ 27, 300 ≈ 38, 800 ≈ 74 (sans pages : 380)
     const pages = Math.min(1200, Math.max(60, b.pages || 380));
@@ -144,9 +158,9 @@ export function mountShelf(root, host) {
 
   /* Un livre est une boîte : la tranche face à nous, la couverture tournée vers la droite.
      Tant qu'on ne l'a pas sorti, sa couverture reste une surface de sa couleur. */
-  function bookEl(b) {
+  function bookEl(b: ShelfBook): Entry {
     const { W, H, T } = geometry(b), col = b.pal ? b.pal.spine : [150, 150, 150];
-    const el = document.createElement('div');
+    const el = createDiv();
     el.className = 'book';
     el.style.width = W + 'px'; el.style.height = H + 'px';
     const ink = lum(col) > .58 ? '#111111' : '#ffffff';
@@ -155,7 +169,7 @@ export function mountShelf(root, host) {
       <div class="face front" style="background-color:${face}; transform: translateZ(${T / 2}px)"></div>
       <div class="face rear" style="background:${rear}; transform: rotateY(180deg) translateZ(${T / 2}px)"></div>
       <div class="face spine" style="width:${T}px; left:${(W - T) / 2}px; background:var(--grain) 0 0 / 160px 160px, linear-gradient(90deg, ${edge}, ${sp} 22%, ${sp} 78%, ${edge}); color:${ink}; transform: rotateY(-90deg) translateZ(${W / 2}px)">
-        <span class="s-title">${esc(b.titre)}</span><span class="s-author">${esc((b.auteur || '').split(' ').at(-1))}</span>
+        <span class="s-title">${esc(b.titre)}</span><span class="s-author">${esc((b.auteur || '').split(' ').pop())}</span>
       </div>
       <div class="face pages" style="width:${T}px; left:${(W - T) / 2}px; transform: rotateY(90deg) translateZ(${W / 2}px)"></div>
       <div class="face tete" style="width:${W}px; height:${T}px; background:linear-gradient(180deg, ${rear} 0 7%, #f1ede4 7% 93%, ${face} 93%); transform: translateY(${-T / 2}px) rotateX(90deg)"></div>`));
@@ -165,12 +179,12 @@ export function mountShelf(root, host) {
   // seuls les genres présents sur l'étagère apparaissent : jamais de filtre qui mène à une étagère vide
   function genreBar() {
     const here = books.filter(onShelf);
-    const opts = GENRES.map(k => [k, W.genres[k], here.filter(b => inGenre(b, k)).length]).filter(o => o[2]);
+    const opts = GENRES.map((k): [string, string, number] => [k, W.genres[k], here.filter(b => inGenre(b, k)).length]).filter(o => o[2]);
     if (genre !== 'tout' && !opts.some(o => o[0] === genre)) genre = 'tout';
-    genresEl.replaceChildren(dom(opts.length ? [['tout', W.all, here.length], ...opts].map(([k, l, n]) => `<button class="genre${k === genre ? ' on' : ''}" data-g="${k}">${l}<span class="n">${n}</span></button>`).join('') : ''));
+    genresEl.replaceChildren(dom(opts.length ? [['tout', W.all, here.length] as [string, string, number], ...opts].map(([k, l, n]) => `<button class="genre${k === genre ? ' on' : ''}" data-g="${k}">${l}<span class="n">${n}</span></button>`).join('') : ''));
   }
   genresEl.addEventListener('click', e => {
-    const g = e.target.closest('.genre');
+    const g = closest(e.target, '.genre');
     if (!g || g.dataset.g === genre) return;
     genre = g.dataset.g;
     host.save('genre', genre);
@@ -179,14 +193,14 @@ export function mountShelf(root, host) {
     window.setTimeout(() => { build(); window.requestAnimationFrame(() => shelfEl.classList.remove('leaving')); }, 280);
   });
 
-  function build(focusId) {
+  function build(focusId?: string) {
     genreBar();
     list = books.filter(b => onShelf(b) && inGenre(b));
     if (shelf === 'lu') list.sort((a, b) => (b.lu || '').localeCompare(a.lu || ''));
     if (shelf === 'en cours') list.sort((a, b) => (b.commence || '').localeCompare(a.commence || ''));
     shelfEl.replaceChildren();
     els = list.map(b => { const o = bookEl(b); shelfEl.appendChild(o.el); return o; });
-    step.unit = els.length ? els.reduce((s, e) => s + e.T + gap(), 0) / els.length : 36;
+    unit = els.length ? els.reduce((s, e) => s + e.T + gap(), 0) / els.length : 36;
     const at = focusId ? list.findIndex(b => b.id === focusId) : -1;
     f = target = Math.max(0, at >= 0 ? at : Math.floor((list.length - 1) / 2)); vel = 0; lastFocus = -1; pulled = null;
     counts(); layout(); showCaption(true);
@@ -198,7 +212,7 @@ export function mountShelf(root, host) {
     let busy = false;
     if (!n) return busy;
     const fp = els.map(e => e.T + gap() + e.pull * (e.W - e.T + 56));
-    const c = [];
+    const c: number[] = [];
     let acc = 0;
     for (let i = 0; i < n; i++) { c.push(acc + fp[i] / 2); acc += fp[i]; }
     const i0 = Math.max(0, Math.min(n - 1, Math.floor(f))), i1 = Math.min(n - 1, i0 + 1);
@@ -216,7 +230,7 @@ export function mountShelf(root, host) {
       const show = p > .02;
       if (show !== e.coverOn) {
         e.coverOn = show;
-        e.el.querySelector('.front').style.backgroundImage = show && e.b.src ? `var(--grain), url('${e.b.src}')` : 'var(--grain)';
+        e.el.querySelector<HTMLElement>('.front').style.backgroundImage = show && e.b.src ? `var(--grain), url('${e.b.src}')` : 'var(--grain)';
         e.el.classList.toggle('out', show);
       }
     }
@@ -225,8 +239,8 @@ export function mountShelf(root, host) {
     return busy;
   }
 
-  let capT;
-  function showCaption(now) {
+  let capT = 0;
+  function showCaption(now?: boolean) {
     const b = list[Math.round(f)];
     const set = () => {
       caption.querySelector('.cap-title').textContent = b ? b.titre : '';
@@ -246,20 +260,20 @@ export function mountShelf(root, host) {
      en un seul mouvement. Tout est réglé en secondes : le même geste a la même durée à 60 ou à 120 images
      par seconde. */
   // un pas de ressort critique : arrive sur « to » sans le dépasser ; k règle la vivacité (en 1/s²)
-  function glide(x, v, to, k, dt) {
+  function glide(x: number, v: number, to: number, k: number, dt: number): [number, number] {
     const w = Math.sqrt(k), n = Math.max(1, Math.ceil(dt * 240)), h = dt / n;
     for (let i = 0; i < n; i++) { v += (-k * (x - to) - 2 * w * v) * h; x += v * h; }
     return [x, v];
   }
   let raf = 0, last = 0, stiff = 120, tracking = false;
-  const waiters = [];
+  const waiters: Waiter[] = [];
   function wake() { if (!raf && alive) { last = performance.now(); raf = window.requestAnimationFrame(step); } }
   // attendre qu'un mouvement soit vraiment fini, plutôt qu'une durée fixe
-  const settle = cond => new Promise(res => { waiters.push({ cond, res }); wake(); });
+  const settle = (cond: () => boolean) => new Promise<void>(res => { waiters.push({ cond, res }); wake(); });
   function resolveWaiters() {
     for (let k = waiters.length - 1; k >= 0; k--) if (waiters[k].cond()) { waiters[k].res(); waiters.splice(k, 1); }
   }
-  function step(now) {
+  function step(now: number) {
     raf = 0;
     const dt = clamp((now - last) / 1000, 0, 1 / 20); last = now;
     target = clamp(target, 0, Math.max(0, els.length - 1));
@@ -278,18 +292,18 @@ export function mountShelf(root, host) {
   }
   function wake2() { if (!raf && alive) raf = window.requestAnimationFrame(step); }
   // où se poser : le livre le plus proche de là où elle allait, mais jamais en arrière de son élan
-  function restingPlace(aim) {
+  function restingPlace(aim: number) {
     let r = Math.round(aim);
     if (Math.abs(vel) > .3 && Math.sign(r - f) !== Math.sign(vel)) r = vel > 0 ? Math.ceil(f) : Math.floor(f);
     return clamp(r, 0, Math.max(0, els.length - 1));
   }
   // aller quelque part : vite pour suivre un geste, posément pour se ranger
-  const goTo = (t, k) => { target = t; stiff = k; wake(); };
+  const goTo = (t: number, k: number) => { target = t; stiff = k; wake(); };
 
   /* Sur un trackpad, un défilement continue tout seul après qu'on a levé les doigts (l'inertie).
      Si on clique pendant ce temps, on ignore la fin de l'élan : sinon le livre qu'on vient de
      sortir serait aussitôt rangé. Un nouveau geste commence après une courte pause. */
-  let wheelLast = 0, wheelHold = false, restT;
+  let wheelLast = 0, wheelHold = false, restT = 0;
   stage.addEventListener('wheel', e => {
     if (RD.on) return;
     e.preventDefault();
@@ -301,13 +315,13 @@ export function mountShelf(root, host) {
     // une molette de souris avance d'un livre par cran ; un trackpad fait glisser l'étagère sous les doigts
     const notch = e.deltaMode === 1 || (Math.abs(d) >= 50 && Number.isInteger(d));
     if (notch) return goTo(Math.round(target) + Math.sign(d), 140);
-    goTo(target + d / (step.unit * 1.6), 300);
+    goTo(target + d / (unit * 1.6), 300);
     // le geste fini, elle se pose sur le livre le plus proche, dans le prolongement de son élan
     window.clearTimeout(restT);
     restT = window.setTimeout(() => goTo(restingPlace(target), 120), 90);
   }, { passive: false });
 
-  let down = null, moved = false;
+  let down: { x: number; f: number; lx: number; lt: number; v: number } | null = null, moved = false;
   stage.addEventListener('pointerdown', e => {
     down = { x: e.clientX, f, lx: e.clientX, lt: performance.now(), v: 0 };
     moved = false;
@@ -318,11 +332,11 @@ export function mountShelf(root, host) {
     if (RD.on) return;
     if (!down) {
       if (pulled) {   // la lumière glisse sur la couverture du livre sorti
-        const r = pulled.el.querySelector('.front').getBoundingClientRect();
+        const r = pulled.el.querySelector<HTMLElement>('.front').getBoundingClientRect();
         pulled.el.style.setProperty('--gx', clamp((e.clientX - r.left) / r.width * 100, -20, 120) + '%');
         pulled.el.style.setProperty('--gy', clamp((e.clientY - r.top) / r.height * 100, -20, 120) + '%');
       }
-      const b = e.target.closest?.('.book');
+      const b = closest(e.target, '.book');
       for (const x of els) { const h = x.el === b; if (x.hover !== h) { x.hover = h; wake(); } }
       return;
     }
@@ -332,7 +346,7 @@ export function mountShelf(root, host) {
     const now = performance.now();
     down.v = down.v * .4 + .6 * (e.clientX - down.lx) / Math.max(1, now - down.lt);   // vitesse lissée, en px/ms
     down.lx = e.clientX; down.lt = now;
-    target = down.f - (e.clientX - down.x) / step.unit;
+    target = down.f - (e.clientX - down.x) / unit;
     wake();
   });
   host.listen(window, 'pointerup', e => {
@@ -341,7 +355,7 @@ export function mountShelf(root, host) {
     if (moved) {
       // lâchée, elle garde l'élan de la main, puis ralentit jusqu'au livre le plus proche de là où elle allait
       tracking = false;
-      vel = performance.now() - down.lt > 80 ? 0 : -down.v * 1000 / step.unit;
+      vel = performance.now() - down.lt > 80 ? 0 : -down.v * 1000 / unit;
       goTo(restingPlace(f + vel * .22), 120);
     }
     stage.classList.remove('dragging');
@@ -350,14 +364,14 @@ export function mountShelf(root, host) {
 
   /* Un clic sur une tranche, ou juste à côté : les tranches sont fines, on ne demande pas
      de viser au pixel près. Premier clic, le livre sort ; deuxième clic, on le prend en main. */
-  function tapShelf(e) {
-    const el = e.target.closest?.('.book');
+  function tapShelf(e: PointerEvent) {
+    const el = closest(e.target, '.book');
     let i = el ? els.findIndex(x => x.el === el) : -1;
     if (i < 0) i = nearestBook(e.clientX, e.clientY);
     if (i < 0) return putBack();
-    if (pulled && pulled === els[i]) open(i); else pullOut(i);
+    if (pulled && pulled === els[i]) void open(i); else pullOut(i);
   }
-  function nearestBook(x, y) {
+  function nearestBook(x: number, y: number) {
     const sr = shelfEl.getBoundingClientRect();
     if (y < sr.top - 40 || y > sr.bottom + 30) return -1;
     let best = -1, bd = 24;
@@ -371,22 +385,22 @@ export function mountShelf(root, host) {
 
   host.listen(window, 'keydown', e => {
     if (!host.active()) return;
-    if (adding()) { if (e.key === 'Escape') adder.classList.contains('picking') ? unpick() : closeAdd(); return; }
-    if (e.target.closest?.('input, textarea, [contenteditable]')) return;
-    if (RD.on) { if (e.key === 'Escape') { e.preventDefault(); close(); } return; }
+    if (adding()) { if (e.key === 'Escape') { if (adder.classList.contains('picking')) unpick(); else closeAdd(); } return; }
+    if (closest(e.target, 'input, textarea, [contenteditable]')) return;
+    if (RD.on) { if (e.key === 'Escape') { e.preventDefault(); void close(); } return; }
     if (e.key === 'ArrowRight') { putBack(); goTo(Math.round(target) + 1, 140); }
     else if (e.key === 'ArrowLeft') { putBack(); goTo(Math.round(target) - 1, 140); }
     else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       const i = Math.round(f);
-      if (pulled && pulled === els[i]) open(i); else pullOut(i);
+      if (pulled && pulled === els[i]) void open(i); else pullOut(i);
     }
     else if (e.key === 'Escape') putBack();
   });
 
   /* ---------- Sortir un livre de l'étagère, le ranger ---------- */
-  let pulled = null;
-  function pullOut(i) {
+  let pulled: Entry | null = null;
+  function pullOut(i: number) {
     const e = els[i];
     if (!e || RD.on) return;
     if (pulled && pulled !== e) pulled.pullTarget = 0;
@@ -399,17 +413,17 @@ export function mountShelf(root, host) {
   }
 
   /* ---------- Les deux étagères ---------- */
-  const tabs = [...root.querySelectorAll('.tab')], pill = $('.tab-pill');
+  const tabs = [...root.querySelectorAll<HTMLElement>('.tab')], pill = $('.tab-pill');
   function counts() {
     for (const t of tabs) {
-      t.querySelector('.count').textContent = books.filter(b => b.lecture === t.dataset.shelf).length;
+      t.querySelector('.count').textContent = String(books.filter(b => b.lecture === t.dataset.shelf).length);
       t.classList.toggle('on', t.dataset.shelf === shelf);
     }
     const on = tabs.find(t => t.dataset.shelf === shelf);
     pill.style.width = on.offsetWidth + 'px';
     pill.style.transform = `translateX(${on.offsetLeft}px)`;
   }
-  function switchShelf(s, focusId) {
+  function switchShelf(s: string, focusId?: string) {
     if (s === shelf && !focusId) return;
     shelf = s;
     host.save('shelf', s);
@@ -428,38 +442,45 @@ export function mountShelf(root, host) {
      qui est de la couleur du livre : elle devient la fiche. Pour revenir, le chemin inverse.
      ===================================================================================== */
   const persp = $('.persp'), body = $('.detail-body'), dCover = $('.detail-cover');
-  const RD = { on: false, busy: false, waiters: [] };
-  let hero = null, zoomEl, hb, coverEl, shadeEl, shadowEl;
+  // le livre qu'on tient : où il était, où il va, et les ressorts de son mouvement
+  const RD = {
+    on: false, busy: false, closing: false, closeAfter: false, waiters: [] as Waiter[],
+    b: null as ShelfBook | null, entry: null as Entry | null,
+    lift: null as Spring | null, cover: null as Spring | null, zoom: null as Spring | null,
+    X0: 0, Y0: 0, S0: 1, X1: 0, Y1: 0, pw: 0, ph: 0, m: 0, W: 0, H: 0,
+  };
+  let hero: HTMLElement | null = null, zoomEl: HTMLElement, hb: HTMLElement, coverEl: HTMLElement, shadeEl: HTMLElement, shadowEl: HTMLElement;
 
   /* un ressort, en secondes : raideur k, amortissement c */
-  function spring(v, k = 170, c = 24) {
-    return {
+  function spring(v: number, k = 170, c = 24): Spring {
+    const s: Spring = {
       v, vel: 0, to: v, k, c,
-      step(dt) {
+      step(dt: number) {
         const n = Math.max(1, Math.ceil(dt * 240)), h = dt / n;
-        for (let i = 0; i < n; i++) { const a = -this.k * (this.v - this.to) - this.c * this.vel; this.vel += a * h; this.v += this.vel * h; }
+        for (let i = 0; i < n; i++) { const a = -s.k * (s.v - s.to) - s.c * s.vel; s.vel += a * h; s.v += s.vel * h; }
       },
-      rest(eps) { return Math.abs(this.v - this.to) < eps && Math.abs(this.vel) < eps * 8; }
+      rest(eps: number) { return Math.abs(s.v - s.to) < eps && Math.abs(s.vel) < eps * 8; }
     };
+    return s;
   }
 
-  function colors(b) {
+  function colors(b: ShelfBook) {
     const bg = b.pal ? b.pal.bg : [80, 80, 80], on = lum(bg) > .6 ? '#1b1a18' : '#fbf8f2';
     for (const el of [detail, persp]) { el.style.setProperty('--c', hex(bg)); el.style.setProperty('--on', on); }
-    dCover.style.setProperty('--ratio', b.ratio || .66);
+    dCover.style.setProperty('--ratio', String(b.ratio || .66));
     const img = dCover.querySelector('img');
     if (b.src) img.src = b.src; else img.removeAttribute('src');
     // l'image garde la taille ; ce qu'on voit, c'est le fond : la couverture et son grain, d'un seul tenant
     dCover.style.backgroundImage = b.src ? `var(--grain), url('${b.src}')` : 'var(--grain)';
   }
 
-  function sizeBook(b) {
+  function sizeBook(b: ShelfBook) {
     const ratio = clamp(b.ratio || .66, .6, .74);
     let ph = Math.min(vh() * .6, 560), pw = ph * ratio;
     if (pw > vw() * .42) { pw = vw() * .42; ph = pw / ratio; }
     const m = Math.max(3, Math.round(ph * .012));
     const g = { pw, ph, m, W: pw - m, H: ph - 2 * m };
-    const set = (k, v) => persp.style.setProperty(k, v + 'px');
+    const set = (k: string, v: number) => persp.style.setProperty(k, v + 'px');
     set('--bw', pw); set('--bh', ph); set('--m', m); set('--pgw', g.W); set('--pgh', g.H);
     return g;
   }
@@ -469,14 +490,14 @@ export function mountShelf(root, host) {
       <div class="hb-shadow"></div><div class="hb-back"></div><div class="hb-page"></div>
       <div class="hb-cover"><div class="hb-front" style="background-image:${RD.b.src ? `var(--grain), url('${RD.b.src}')` : 'var(--grain)'}"><i class="hb-shade"></i></div><div class="hb-inside"></div></div>
     </div></div></div>`));
-    zoomEl = persp.firstElementChild; hero = zoomEl.firstElementChild; hb = hero.firstElementChild;
-    coverEl = hb.querySelector('.hb-cover'); shadeEl = hb.querySelector('.hb-shade'); shadowEl = hb.querySelector('.hb-shadow');
+    zoomEl = persp.firstElementChild as HTMLElement; hero = zoomEl.firstElementChild as HTMLElement; hb = hero.firstElementChild as HTMLElement;
+    coverEl = hb.querySelector<HTMLElement>('.hb-cover'); shadeEl = hb.querySelector<HTMLElement>('.hb-shade'); shadowEl = hb.querySelector<HTMLElement>('.hb-shadow');
     RD.X1 = vw() / 2; RD.Y1 = vh() * .47 - RD.ph / 2;
   }
 
   /* le livre se pose exactement là où il était sur l'étagère (au départ ou au retour) */
-  function anchorTo(e) {
-    const r = e.el.querySelector('.front').getBoundingClientRect(), o = box();
+  function anchorTo(e: Entry) {
+    const r = e.el.querySelector<HTMLElement>('.front').getBoundingClientRect(), o = box();
     RD.S0 = r.width / RD.pw; RD.X0 = r.left - o.left + RD.S0 * RD.pw / 2; RD.Y0 = r.top - o.top;
   }
 
@@ -506,8 +527,8 @@ export function mountShelf(root, host) {
 
   let rraf = 0, rlast = 0;
   function rwake() { if (!rraf && alive) { rlast = performance.now(); rraf = window.requestAnimationFrame(rstep); } }
-  const until = cond => new Promise(res => { RD.waiters.push({ cond, res }); rwake(); });
-  function rstep(now) {
+  const until = (cond: () => boolean) => new Promise<void>(res => { RD.waiters.push({ cond, res }); rwake(); });
+  function rstep(now: number) {
     rraf = 0;
     if (!RD.on || !hero) return;
     const dt = Math.min(1 / 30, Math.max(0, (now - rlast) / 1000)); rlast = now;
@@ -521,7 +542,7 @@ export function mountShelf(root, host) {
     if (!(RD.lift.rest(.0005) && c.rest(.05) && RD.zoom.rest(.0005)) || RD.waiters.length) rwake();
   }
 
-  async function open(i) {
+  async function open(i: number) {
     const e = els[i];
     if (!e || RD.on) return;
     Object.assign(RD, { on: true, busy: true, closeAfter: false, b: e.b, entry: e, waiters: [] });
@@ -548,7 +569,7 @@ export function mountShelf(root, host) {
     await until(() => RD.zoom.v > .99);
     persp.replaceChildren(); persp.classList.remove('fade'); hero = null;
     RD.busy = false;
-    if (RD.closeAfter) close();                           // Échap pendant qu'on le prenait : on le repose aussitôt
+    if (RD.closeAfter) void close();                           // Échap pendant qu'on le prenait : on le repose aussitôt
   }
 
   async function close() {
@@ -577,38 +598,38 @@ export function mountShelf(root, host) {
     persp.replaceChildren(); hero = null;
     Object.assign(RD, { on: false, busy: false, closing: false, closeAfter: false });
     pulled = e;   // il reste sorti : un clic ailleurs le range
-    if (stale) reload();
+    if (stale) void reload();
   }
 
   /* ---------- La fiche ---------- */
-  const yearOf = y => typeof y !== 'number' ? String(y) : y < 1000 ? W.year(y) : String(y);
-  const statusOf = b => {
-    const when = (d, k) => { const [y, m] = String(d || '').split('-'); return m ? `${W.when[k]} ${W.months[+m - 1]} ${y}` : ''; };
+  const yearOf = (y: number | string) => typeof y !== 'number' ? String(y) : y < 1000 ? W.year(y) : String(y);
+  const statusOf = (b: Book) => {
+    const when = (d: string | undefined, k: string) => { const [y, m] = String(d || '').split('-'); return m ? `${W.when[k]} ${W.months[+m - 1]} ${y}` : ''; };
     if (b.lecture === 'lu') return when(b.lu, 'lu') || W.status.lu;
     if (b.lecture === 'en cours') return when(b.commence, 'en cours') || W.status['en cours'];
     return W.status['a lire'];
   };
-  const genreOf = b => { const g = (b.genres || []).filter(x => x !== 'fiction' && x !== 'non-fiction'); return W.genres[g[0] || (b.genres || [])[0]]; };
-  const byTitle = t => t && books.find(b => fold(b.titre) === fold(t) || (b.aliases || []).some(a => fold(a) === fold(t)));
+  const genreOf = (b: Book) => { const g = (b.genres || []).filter(x => x !== 'fiction' && x !== 'non-fiction'); return W.genres[g[0] || (b.genres || [])[0]]; };
+  const byTitle = (t: string | undefined) => t && books.find(b => fold(b.titre) === fold(t) || (b.aliases || []).some(a => fold(a) === fold(t)));
 
-  function related(b) {
-    const out = [], seen = new Set([b.id]);
-    const add = (x, why) => { if (x && !seen.has(x.id)) { seen.add(x.id); out.push({ x, why }); } };
+  function related(b: ShelfBook) {
+    const out: { x: ShelfBook; why: string }[] = [], seen = new Set([b.id]);
+    const add = (x: ShelfBook | undefined | '', why: string) => { if (x && !seen.has(x.id)) { seen.add(x.id); out.push({ x, why }); } };
     add(byTitle(b.suiteDe), W.rel.before);
     for (const x of books) if (byTitle(x.suiteDe) === b) add(x, W.rel.next);
     add(byTitle(b.decouvert), W.rel.foundHere);
     for (const x of books) if (byTitle(x.decouvert) === b) add(x, W.rel.ledHere);
-    const shared = x => (x.themes || []).filter(t => (b.themes || []).includes(t));
+    const shared = (x: Book) => (x.themes || []).filter(t => (b.themes || []).includes(t));
     books.map(x => ({ x, s: shared(x) })).filter(r => r.s.length).sort((a, c) => c.s.length - a.s.length)
       .forEach(r => add(r.x, r.s.slice(0, 2).join(', ')));
     return out.slice(0, 6);
   }
 
-  function fill(b) {
+  function fill(b: ShelfBook) {
     const notes = b.cards || [];
     const cit = notes.reduce((s, n) => s + (n.cit || 0), 0);
     const rel = related(b), g = genreOf(b);
-    const S = [];
+    const S: string[] = [];
     S.push(`<div class="d-status">${statusOf(b)}${g ? ' · ' + g : ''}</div>`);
     S.push(`<h1 class="d-title">${esc(b.titre)}</h1>`);
     S.push(`<div class="d-meta">${[esc(b.auteur), b.annee ? yearOf(b.annee) : '', b.decouvert ? `${W.foundVia} ${esc(b.decouvert)}` : ''].filter(Boolean).join(' · ')}</div>`);
@@ -629,19 +650,20 @@ export function mountShelf(root, host) {
       rel.map(r => `<button class="mini" data-id="${esc(r.x.id)}">${r.x.src ? `<img src="${r.x.src}" alt="">` : `<span class="mini-blank">${esc(r.x.titre)}</span>`}<span class="why">${esc(r.why)}</span></button>`).join('')
     }</div></div>`);
     // ce qu'on peut faire du livre, selon où il en est
-    const acts = ({ 'a lire': ['en cours', 'lu'], 'en cours': ['lu', 'a lire'], lu: ['en cours', 'a lire'] }[b.lecture] || []).map(k => [k, W.act[k]]);
+    const next: Record<string, Status[]> = { 'a lire': ['en cours', 'lu'], 'en cours': ['lu', 'a lire'], lu: ['en cours', 'a lire'] };
+    const acts = (next[b.lecture] || []).map(k => [k, W.act[k]]);
     S.push(`<div class="actions">${acts.map(([to, label], i) => `<button class="${i ? 'btn-line' : 'btn'} mark" data-to="${to}">${label}</button>`).join('')}<button class="btn-line edit">${W.act.note}</button><button class="btn-line remove">${W.act.remove}</button></div>`);
     body.replaceChildren(dom(S.join('')));
-    [...body.children].forEach((c, i) => c.style.setProperty('--i', i));
+    [...body.children].forEach((c, i) => (c as HTMLElement).style.setProperty('--i', String(i)));
     body.scrollTop = 0;
-    body.querySelectorAll('.mini').forEach(m => m.addEventListener('click', () => jump(books.find(x => x.id === m.dataset.id))));
-    body.querySelectorAll('.note').forEach(n => n.addEventListener('click', () => host.open(n.dataset.path)));
-    body.querySelectorAll('.chip.known').forEach(c => c.addEventListener('click', () => host.openName(c.dataset.name)));
-    body.querySelectorAll('.mark').forEach(m => m.addEventListener('click', () => mark(b, m.dataset.to)));
-    body.querySelector('.edit').addEventListener('click', () => host.open(b.path));
+    body.querySelectorAll<HTMLElement>('.mini').forEach(m => m.addEventListener('click', () => jump(books.find(x => x.id === m.dataset.id))));
+    body.querySelectorAll<HTMLElement>('.note').forEach(n => n.addEventListener('click', () => void host.open(n.dataset.path)));
+    body.querySelectorAll<HTMLElement>('.chip.known').forEach(c => c.addEventListener('click', () => void host.openName(c.dataset.name)));
+    body.querySelectorAll<HTMLElement>('.mark').forEach(m => m.addEventListener('click', () => void mark(b, m.dataset.to as Status)));
+    body.querySelector('.edit').addEventListener('click', () => void host.open(b.path));
     // retirer demande une seconde pression, et la note reste dans le vault
-    const rm = body.querySelector('.remove');
-    rm.addEventListener('click', async () => {
+    const rm = body.querySelector<HTMLButtonElement>('.remove');
+    rm.addEventListener('click', () => void (async () => {
       if (!rm.classList.contains('sure')) {
         rm.classList.add('sure'); rm.textContent = W.act.sure;
         window.setTimeout(() => { if (rm.isConnected && !rm.disabled) { rm.classList.remove('sure'); rm.textContent = W.act.remove; } }, 3500);
@@ -653,11 +675,11 @@ export function mountShelf(root, host) {
       await close();
       build();
       toast(W.toast.removed(b.titre));
-    });
+    })());
   }
 
   /* Passer d'un livre ouvert à un autre, sans repasser par l'étagère */
-  function jump(b) {
+  function jump(b: ShelfBook | undefined) {
     if (!b || RD.busy) return;
     RD.busy = true;
     detail.classList.remove('ready');
@@ -676,25 +698,25 @@ export function mountShelf(root, host) {
     }, 280);
   }
 
-  let toastT;
-  function toast(msg) {
+  let toastT = 0;
+  function toast(msg: string) {
     const t = $('.toast');
     t.textContent = msg; t.classList.add('show');
     window.clearTimeout(toastT); toastT = window.setTimeout(() => t.classList.remove('show'), 2400);
   }
 
-  async function mark(b, lecture) {
+  async function mark(b: ShelfBook, lecture: Status) {
     const today = new Date().toISOString().slice(0, 10);
     b.lecture = lecture;
     b.lu = lecture === 'lu' ? today : undefined;
     if (lecture === 'en cours') b.commence = today; else if (lecture === 'a lire') b.commence = undefined;
-    host.setLecture(b, lecture);
+    void host.setLecture(b, lecture);
     await close();
     switchShelf(lecture, b.id);
     toast(W.toast[lecture](b.titre));
   }
 
-  $('.back').addEventListener('click', close);
+  $('.back').addEventListener('click', () => void close());
 
   /* la couverture suit doucement la souris, comme un objet qu'on tient */
   detail.addEventListener('pointermove', e => {
@@ -707,12 +729,12 @@ export function mountShelf(root, host) {
   });
 
   /* ---------- Ajouter un livre : chercher dans Open Library, dire pourquoi, le poser ---------- */
-  const adder = $('.adder'), q = $('.adder-q'), results = $('.results'), state = $('.adder-state'), pick = $('.pick');
-  let found = [], docs = [], sel = -1, searchT, searchN = 0, chosen = null;
+  const adder = $('.adder'), q = $<HTMLInputElement>('.adder-q'), results = $('.results'), state = $('.adder-state'), pick = $('.pick');
+  let found: OLDoc[] = [], docs: OLDoc[] = [], sel = -1, searchT = 0, searchN = 0, chosen: OLDoc | null = null;
   const adding = () => adder.classList.contains('open');
-  const have = d => books.some(b => b.olkey === d.key || fold(b.titre) === fold(d.title));
-  const coverOf = (d, size) => `https://covers.openlibrary.org/b/id/${d.cover_i}-${size}.jpg`;
-  const authors = d => (d.author_name || []).slice(0, 2).join(', ');
+  const have = (d: OLDoc) => books.some(b => b.olkey === d.key || fold(b.titre) === fold(d.title));
+  const coverOf = (d: OLDoc, size: string) => `https://covers.openlibrary.org/b/id/${d.cover_i}-${size}.jpg`;
+  const authors = (d: OLDoc) => (d.author_name || []).slice(0, 2).join(', ');
 
   function openAdd() {
     if (RD.on) return;
@@ -724,7 +746,7 @@ export function mountShelf(root, host) {
   function closeAdd() {
     adder.classList.remove('open', 'picking'); adder.setAttribute('aria-hidden', 'true');
     q.blur(); searchN++; window.clearTimeout(searchT);
-    if (stale) reload();
+    if (stale) void reload();
   }
   $('.add-btn').addEventListener('click', openAdd);
   $('.adder-close').addEventListener('click', closeAdd);
@@ -733,9 +755,9 @@ export function mountShelf(root, host) {
     window.clearTimeout(searchT);
     const v = q.value.trim();
     if (v.length < 2) { searchN++; results.replaceChildren(); state.textContent = ''; found = []; return; }
-    searchT = window.setTimeout(() => search(v), 280);
+    searchT = window.setTimeout(() => void search(v), 280);
   });
-  async function search(v) {
+  async function search(v: string) {
     const n = ++searchN;
     state.textContent = W.searching;
     try {
@@ -747,11 +769,11 @@ export function mountShelf(root, host) {
       results.replaceChildren(dom(found.map((d, i) => `<button class="result${have(d) ? ' have' : ''}" data-i="${i}" style="--i:${i}">
         <span class="r-cover" style="background-image:url('${coverOf(d, 'M')}')"></span>
         <span><span class="r-title">${esc(d.title)}</span><span class="r-author">${esc(authors(d))}</span></span>
-        <span class="r-year">${d.first_publish_year || ''}</span></button>`).join('')));
+        <span class="r-year">${esc(d.first_publish_year)}</span></button>`).join('')));
     } catch { if (n === searchN) state.textContent = W.offline; }
   }
   results.addEventListener('click', e => {
-    const r = e.target.closest('.result');
+    const r = closest(e.target, '.result');
     if (r && !r.classList.contains('have')) choose(found[+r.dataset.i]);
   });
   q.addEventListener('keydown', e => {
@@ -768,14 +790,14 @@ export function mountShelf(root, host) {
   });
 
   // Open Library a parfois plusieurs fiches pour le même livre : les sujets et le résumé sont répartis entre elles
-  const twins = d => docs.filter(x => x.key !== d.key && fold(x.title) === fold(d.title) && (x.author_name || [])[0] === (d.author_name || [])[0]).slice(0, 3);
-  const subjects = d => [...new Set([...(d.subject || []), ...twins(d).flatMap(x => x.subject || [])])];
-  function choose(d) {
+  const twins = (d: OLDoc) => docs.filter(x => x.key !== d.key && fold(x.title) === fold(d.title) && (x.author_name || [])[0] === (d.author_name || [])[0]).slice(0, 3);
+  const subjects = (d: OLDoc) => [...new Set([...(d.subject || []), ...twins(d).flatMap(x => x.subject || [])])];
+  function choose(d: OLDoc) {
     chosen = d;
     // les tropes ne s'affichent que pour la fantasy et la science-fiction ; ceux qu'Open Library connaît sont déjà cochés
     const subj = subjects(d).join(' | ').toLowerCase();
     const fiction = inferGenres([...subjects(d), d.title]).some(g => g === 'fantasy' || g === 'science-fiction');
-    const tropes = fiction ? W.tropeList.map((t, i) => [t, TROPE_HINTS[i].test(subj)]) : [];
+    const tropes = fiction ? W.tropeList.map((t, i): [string, boolean] => [t, TROPE_HINTS[i].test(subj)]) : [];
     pick.replaceChildren(dom(`<div class="pick-cover" style="background-image:url('${coverOf(d, 'L')}')"></div>
       <div>
         <div class="pick-title">${esc(d.title)}</div>
@@ -783,45 +805,48 @@ export function mountShelf(root, host) {
         <label class="field"><span>${W.why}</span><textarea class="p-why" rows="3" placeholder="${esc(W.whyPh)}"></textarea></label>
         <label class="field"><span>${W.from}</span><input class="p-from" list="etagere-titres" placeholder="${esc(W.fromPh)}"><datalist id="etagere-titres">${books.map(b => `<option value="${esc(b.titre)}">`).join('')}</datalist></label>
         ${tropes.length ? `<div class="field"><span>${W.tropes} <em>${W.tropesHint}</em></span><div class="p-tropes">${
-          tropes.sort((a, b) => b[1] - a[1]).map(([t, on]) => `<button type="button" class="p-trope${on ? ' on' : ''}" aria-pressed="${on}">${esc(t)}</button>`).join('')
+          tropes.sort((a, b) => Number(b[1]) - Number(a[1])).map(([t, on]) => `<button type="button" class="p-trope${on ? ' on' : ''}" aria-pressed="${on}">${esc(t)}</button>`).join('')
         }</div></div>` : ''}
         <div class="pick-actions"><button class="btn-ink p-add">${W.put}</button><button class="btn-ghost p-back">${W.other}</button></div>
       </div>`));
     adder.classList.add('picking');
-    window.setTimeout(() => pick.querySelector('.p-why').focus(), 80);
-    pick.querySelector('.p-add').addEventListener('click', add);
+    window.setTimeout(() => pick.querySelector<HTMLElement>('.p-why').focus(), 80);
+    pick.querySelector('.p-add').addEventListener('click', () => void add());
     pick.querySelector('.p-back').addEventListener('click', unpick);
-    pick.querySelectorAll('.p-trope').forEach(c => c.addEventListener('click', () => { const on = c.classList.toggle('on'); c.setAttribute('aria-pressed', on); }));
-    pick.querySelector('.p-from').addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
-    pick.querySelector('.p-why').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) add(); });
+    pick.querySelectorAll('.p-trope').forEach(c => c.addEventListener('click', () => { const on = c.classList.toggle('on'); c.setAttribute('aria-pressed', String(on)); }));
+    pick.querySelector<HTMLElement>('.p-from').addEventListener('keydown', e => { if (e.key === 'Enter') void add(); });
+    pick.querySelector<HTMLElement>('.p-why').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void add(); });
   }
   function unpick() { adder.classList.remove('picking'); q.focus(); }
 
   const NOISE = /accessible|daisy|library|large type|reading level|lending|textbook|translations|bestseller|:|=|\d{4}/i;
-  async function summary(d) {
+  async function summary(d: OLDoc) {
     for (const x of [d, ...twins(d)]) { const t = await host.description(x.key); if (t) return t; }
     return '';
   }
   async function add() {
-    const d = chosen, btn = pick.querySelector('.p-add');
+    const d = chosen, btn = pick.querySelector<HTMLButtonElement>('.p-add');
     if (!d || btn.disabled) return;
     btn.disabled = true; btn.textContent = W.preparing;
-    const seen = new Set();
-    const data = {
+    const seen = new Set<string>();
+    const data: NewBook = {
       titre: d.title, auteur: (d.author_name || [])[0] || '', annee: d.first_publish_year, pages: d.number_of_pages_median,
       olkey: d.key, couverture: coverOf(d, 'L'),
       mots: subjects(d).filter(s => s.length < 28 && !NOISE.test(s) && !seen.has(fold(s)) && seen.add(fold(s))).slice(0, 6),
       genres: inferGenres([...subjects(d), d.title]),
-      pourquoi: pick.querySelector('.p-why').value.trim(),
-      decouvert: pick.querySelector('.p-from').value.trim(),
+      pourquoi: pick.querySelector<HTMLTextAreaElement>('.p-why').value.trim(),
+      decouvert: pick.querySelector<HTMLInputElement>('.p-from').value.trim(),
       tropes: [...pick.querySelectorAll('.p-trope.on')].map(c => c.textContent),
       resume: await summary(d),   // souvent en anglais : de quoi se décider en attendant mieux
     };
-    let path;
+    let path: string;
     try { path = await host.add(data); }
     catch { btn.disabled = false; btn.textContent = W.put; toast(W.toast.failed); return; }
     // le livre est posé tout de suite ; la relecture du vault le confirmera
-    const b = { id: path, path, lecture: 'a lire', themes: [], tropes: [], ...data };
+    const b: ShelfBook = {
+      ...data, id: path, path, lecture: 'a lire', auteur: data.auteur, annee: data.annee ?? '', themes: [], aliases: [],
+      mots: data.mots, genres: data.genres, tropes: data.tropes, resume: data.resume, pourquoi: data.pourquoi,
+    };
     books = books.filter(x => x.id !== path).concat(b);
     await load(b);
     closeAdd();
@@ -831,8 +856,8 @@ export function mountShelf(root, host) {
   }
 
   /* ---------- Charger : les livres du vault, leurs couvertures, leurs couleurs ---------- */
-  function load(b) {
-    return host.cover(b).then(src => new Promise(res => {
+  function load(b: ShelfBook) {
+    return host.cover(b).then(src => new Promise<void>(res => {
       b.src = src || '';
       if (!src) return res();
       const img = new Image();
@@ -847,28 +872,28 @@ export function mountShelf(root, host) {
     for (const b of books) { if (!alive) return; try { b.cards = await host.cards(b); } catch { b.cards = []; } }
   }
 
-  let stale = false, loading = null;
-  async function reload() {
+  let stale = false, loading: Promise<void> | null = null;
+  async function reload(): Promise<void> {
     // pendant qu'un livre est ouvert ou qu'on en ajoute un, on attend : rien ne doit bouger sous ses mains
     if (RD.on || adding()) { stale = true; return; }
-    if (loading) { stale = true; return loading; }
+    if (loading !== null) { stale = true; return loading; }
     stale = false;
     loading = (async () => {
       const keep = list[Math.round(f)]?.id, prev = new Map(books.map(b => [b.id, b]));
-      const next = await host.books();
+      const next: ShelfBook[] = await host.books();
       // un livre déjà chargé garde sa couverture et ses couleurs si elle n'a pas changé
       for (const b of next) { const o = prev.get(b.id); if (o && o.couverture === b.couverture) Object.assign(b, { src: o.src, pal: o.pal, ratio: o.ratio, cards: o.cards }); }
       await Promise.all(next.filter(b => b.src === undefined).map(load));
       if (!alive) return;
       books = next;
       if (!RD.on && !adding()) build(keep);
-      loadCards();
+      void loadCards();
     })();
-    try { await loading; } finally { loading = null; if (stale) reload(); }
+    try { await loading; } finally { loading = null; if (stale) void reload(); }
   }
-  const unsubscribe = host.onChange(() => reload());
+  const unsubscribe = host.onChange(() => void reload());
 
-  let resizeT;
+  let resizeT = 0;
   const ro = new ResizeObserver(() => {
     window.clearTimeout(resizeT);
     resizeT = window.setTimeout(() => { if (RD.on) return; measure(); build(list[Math.round(f)]?.id); }, 120);
@@ -876,7 +901,7 @@ export function mountShelf(root, host) {
   ro.observe(root);
 
   measure();
-  reload();
+  void reload();
 
   return {
     destroy() {

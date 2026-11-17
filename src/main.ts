@@ -1,15 +1,15 @@
 /* Livres (l'étagère) : une liste de lecture qu'on parcourt comme une vraie étagère.
    Le plugin ouvre une vue plein onglet qui ne ressemble pas à Obsidian ; les livres, eux, restent
    des notes ordinaires du vault (voir livres.ts). */
-import { App, ItemView, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, debounce, getLanguage, sanitizeHTMLToDom } from 'obsidian';
+import { App, ItemView, Plugin, PluginSettingTab, Setting, type SettingDefinitionItem, TFile, WorkspaceLeaf, debounce, getLanguage, sanitizeHTMLToDom } from 'obsidian';
 import { defaults, Livres, Settings } from './livres';
 
 // la langue d'Obsidian : le français pour le français, l'anglais pour toutes les autres
 const OBSIDIAN = getLanguage().startsWith('fr') ? 'fr' : 'en';
 // le réglage « Langue » peut l'imposer ; fixé au chargement du plugin
 let LANG = OBSIDIAN, FR = LANG === 'fr';
-// l'interface est écrite en JavaScript (etagere.d.ts dit ce qu'elle attend)
-import { mountShelf } from './etagere.js';
+// l'étagère elle-même : le geste, l'affichage ; tout ce qui touche au vault passe par l'hôte ci-dessous
+import { mountShelf } from './etagere';
 import type { Book, NewBook } from './types';
 
 const VIEW = 'livres-view';
@@ -21,7 +21,7 @@ class ShelfView extends ItemView {
   getDisplayText() { return 'Livres'; }
   getIcon() { return 'library'; }
 
-  async onOpen() {
+  onOpen() {
     this.contentEl.empty();
     this.contentEl.addClass('etagere-host');
     const root = this.contentEl.createDiv({ cls: 'etagere' });
@@ -46,8 +46,9 @@ class ShelfView extends ItemView {
       active: () => ws.getActiveViewOfType(ShelfView) === this,
       onChange: (fn: () => void) => { this.plugin.changeFns.add(fn); return () => this.plugin.changeFns.delete(fn); },
     });
+    return Promise.resolve();
   }
-  async onClose() { this.ui?.destroy(); this.ui = null; }
+  onClose() { this.ui?.destroy(); this.ui = null; return Promise.resolve(); }
 }
 
 export default class EtagerePlugin extends Plugin {
@@ -85,6 +86,27 @@ export default class EtagerePlugin extends Plugin {
 
 class Reglages extends PluginSettingTab {
   constructor(app: App, private plugin: EtagerePlugin) { super(app, plugin); }
+  // à partir d'Obsidian 1.13 : les réglages décrits ici, pour qu'ils apparaissent dans la recherche des paramètres
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      { name: FR ? 'Langue' : 'Language',
+        desc: FR ? 'La langue de l’étagère. Prend effet au prochain lancement d’Obsidian.' : 'The language of the shelf. Takes effect the next time Obsidian starts.',
+        control: { type: 'dropdown', key: 'langue', options: { '': FR ? 'Celle d’Obsidian' : 'Same as Obsidian', fr: 'Français', en: 'English' } } },
+      { name: FR ? 'Dossier des nouveaux livres' : 'Folder for new books',
+        desc: FR ? 'Où l’étagère crée la note d’un livre ajouté. Vide : Livres/.' : 'Where the shelf creates the note of a book you add. Empty: Books/.',
+        control: { type: 'text', key: 'dossier', placeholder: FR ? 'Livres' : 'Books' } },
+      { name: FR ? 'Type des notes de livre' : 'Book note type',
+        desc: FR ? 'Une note est un livre quand son en-tête porte « type: » suivi de ce mot. Vide : livre ou book.' : 'A note is a book when its properties say “type:” followed by this word. Empty: book or livre.',
+        control: { type: 'text', key: 'type', placeholder: 'Livre, book' } },
+    ];
+  }
+  getControlValue(key: string): unknown { return this.plugin.settings[key as keyof Settings]; }
+  async setControlValue(key: string, value: unknown) {
+    const v = typeof value === 'string' ? value : '', s = this.plugin.settings;
+    if (key === 'langue') s.langue = v; else if (key === 'dossier') s.dossier = v.trim(); else if (key === 'type') s.type = v.trim();
+    await this.plugin.save();
+  }
+  // avant Obsidian 1.13 : les mêmes réglages, dessinés à la main
   display() {
     const { containerEl: el } = this, s = this.plugin.settings;
     el.empty();

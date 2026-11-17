@@ -1,6 +1,6 @@
 /* Étagère : tout est rangé sous .etagere, pour ne rien changer au reste d'Obsidian.
    Généré à partir du prototype (projects/etagere/prototype/style.css), puis adapté à un onglet. */
-.etagere-host.view-content { padding: 0 !important; overflow: hidden; }
+.workspace-leaf-content .etagere-host.view-content { padding: 0; overflow: hidden; }
 .etagere { position: relative; height: 100%; width: 100%; overflow: hidden; }
 /* Obsidian habille les boutons et les champs : on repart de rien, nos classes les redessinent */
 .etagere button { height: auto; box-shadow: none; border: 0; background: none; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; border-radius: 0; }
@@ -82,7 +82,7 @@
 .etagere .results { overflow-y: auto; scrollbar-width: none; padding-bottom: 60px; }
 .etagere .results::-webkit-scrollbar { display: none; }
 .etagere .result {
-  display: grid; grid-template-columns: 44px 1fr auto; gap: 18px; align-items: center; width: 100%;
+  display: grid; grid-template-columns: 44px 1fr auto; gap: 18px; align-items: center;
   border: 0; background: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
   padding: 10px 12px; margin: 0 -12px; width: calc(100% + 24px); border-radius: 10px;
   opacity: 0; transform: translateY(8px); animation: etagere-rise .45s var(--ease) forwards; animation-delay: calc(var(--i) * 35ms);
@@ -93,7 +93,7 @@
 .etagere .result .r-title { display: block; font-size: 16px; font-weight: 600; letter-spacing: -.015em; line-height: 1.25; }
 .etagere .result .r-author { display: block; font-size: 13px; color: var(--muted); margin-top: 3px; }
 .etagere .result .r-year { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.etagere .result.have { cursor: default; opacity: .45 !important; }
+.etagere .result.have { cursor: default; animation-name: etagere-rise-dim; }
 .etagere .result.have .r-year::after { content: " · déjà là"; }
 .etagere .pick { display: none; }
 .etagere .adder.picking .results, .etagere .adder.picking .adder-state { display: none; }
@@ -111,14 +111,15 @@
 .etagere .field input:focus, .etagere .field textarea:focus { background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.14); }
 .etagere .field span em { font-style: normal; font-weight: 500; letter-spacing: .04em; text-transform: none; opacity: .7; margin-left: 4px; }
 .etagere .p-tropes { display: flex; flex-wrap: wrap; gap: 6px; }
-.etagere button.p-trope {
-  border: 0 !important; box-shadow: inset 0 0 0 1px rgba(0,0,0,.14) !important; background: none !important; color: var(--muted) !important;
-  font: 500 12.5px var(--sans) !important; height: auto !important; padding: 6px 11px !important; border-radius: 999px !important; cursor: pointer;
+/* les sélecteurs commencent par .etagere-host pour passer devant le style des boutons et des champs d'Obsidian */
+.etagere-host .etagere button.p-trope {
+  border: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.14); background: none; color: var(--muted);
+  font: 500 12.5px var(--sans); height: auto; padding: 6px 11px; border-radius: 999px; cursor: pointer;
   transition: background .15s, color .15s, box-shadow .15s, transform .15s var(--ease);
 }
-.etagere button.p-trope:hover { color: var(--ink) !important; }
-.etagere button.p-trope:active { transform: scale(.96); }
-.etagere button.p-trope.on { background: var(--ink) !important; color: #fff !important; box-shadow: none !important; }
+.etagere-host .etagere button.p-trope:hover { color: var(--ink); }
+.etagere-host .etagere button.p-trope:active { transform: scale(.96); }
+.etagere-host .etagere button.p-trope.on { background: var(--ink); color: #fff; box-shadow: none; }
 .etagere .pick-actions { display: flex; gap: 10px; margin-top: 26px; }
 .etagere .btn-ink { border: 0; cursor: pointer; font: 600 14px var(--sans); padding: 13px 22px; border-radius: 999px; background: var(--ink); color: #fff; transition: transform .2s var(--ease); }
 .etagere .btn-ink:active { transform: scale(.97); }
@@ -294,6 +295,8 @@
 .etagere .detail-body > * { opacity: 0; transform: translateY(14px); }
 .etagere .detail.ready .detail-body > * { animation: etagere-rise .55s var(--ease) forwards; animation-delay: calc(var(--i) * 38ms + 40ms); }
 @keyframes etagere-rise { to { opacity: 1; transform: none; } }
+/* un livre déjà sur l'étagère apparaît à demi effacé */
+@keyframes etagere-rise-dim { to { opacity: .45; transform: none; } }
 .etagere .d-status {
   display: inline-flex; gap: 8px; align-items: center;
   font: 600 10.5px var(--sans); letter-spacing: .16em; text-transform: uppercase; color: color-mix(in srgb, var(--on) 75%, transparent);
@@ -359,7 +362,8 @@
   .etagere .detail-body { overflow: visible; padding: 32px 20px 80px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .etagere, .etagere * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  /* :not(#_) donne à cette règle le poids d'un identifiant : elle passe devant toutes les autres de l'étagère */
+  .etagere:not(#_), .etagere :not(#_) { transition-duration: .01ms; animation-duration: .01ms; }
 }
 /* ---------- Propre au plugin ---------- */
 .etagere .note { display: grid; width: 100%; text-align: left; cursor: pointer; border-radius: 0; transition: opacity .2s; }
@@ -373,19 +377,19 @@
 .etagere .detail-cover { background: color-mix(in srgb, var(--on) 12%, transparent); }
 
 /* le champ de recherche : Obsidian dessine un cadre arrondi et un halo sur tous ses champs, on les retire */
-.etagere input.adder-q, .etagere input.adder-q:hover, .etagere input.adder-q:focus, .etagere input.adder-q:focus-visible {
-  border: 0 !important; border-bottom: 1px solid var(--line) !important; border-radius: 0 !important;
-  background: none !important; box-shadow: none !important; outline: none !important;
-  height: auto !important; padding: 0 0 14px !important;
-  font: 600 clamp(30px, 4vw, 46px)/1.1 var(--sans) !important; letter-spacing: -.035em; color: var(--ink) !important;
+.etagere-host .etagere input.adder-q, .etagere-host .etagere input.adder-q:hover, .etagere-host .etagere input.adder-q:focus, .etagere-host .etagere input.adder-q:focus-visible {
+  border: 0; border-bottom: 1px solid var(--line); border-radius: 0;
+  background: none; box-shadow: none; outline: none;
+  height: auto; padding: 0 0 14px;
+  font: 600 clamp(30px, 4vw, 46px)/1.1 var(--sans); letter-spacing: -.035em; color: var(--ink);
 }
-.etagere .field input, .etagere .field textarea { border: 0 !important; border-radius: 10px !important; height: auto !important; }
-.etagere .field input:focus, .etagere .field textarea:focus { box-shadow: 0 0 0 1px rgba(0,0,0,.14) !important; outline: none !important; }
+.etagere-host .etagere .field input, .etagere-host .etagere .field textarea { border: 0; border-radius: 10px; height: auto; }
+.etagere-host .etagere .field input:focus, .etagere-host .etagere .field textarea:focus { box-shadow: 0 0 0 1px rgba(0,0,0,.14); outline: none; }
 
 /* « Où il mène » : Obsidian aligne le contenu des boutons sur une ligne et le centre ;
    ici, la couverture puis sa raison en dessous, alignées à gauche comme le reste de la fiche */
 .etagere .trail { gap: 22px; }
-.etagere .mini { display: flex !important; flex-direction: column; align-items: flex-start; justify-content: flex-start; width: 92px; height: auto !important; padding: 0 !important; overflow: visible; }
+.etagere-host .etagere .mini { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; width: 92px; height: auto; padding: 0; overflow: visible; }
 .etagere .mini img, .etagere .mini .mini-blank { flex: none; }
 .etagere .mini .why {
   width: 100%; margin-top: 10px; font-size: 11.5px; line-height: 1.35; opacity: .72; text-align: left;

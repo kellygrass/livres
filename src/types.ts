@@ -26,3 +26,25 @@ export interface OLDoc {
 
 // une note écrite sur un livre, montrée dans sa fiche
 export interface Card { t: string; ex: string; cit: number; path: string }
+
+// ce que l'étagère attend de l'hôte (main.ts) : tout ce qui touche au vault passe par lui
+export interface ShelfHost {
+  lang: string;
+  html: (h: string) => DocumentFragment;
+  books: () => Promise<Book[]>;
+  cards: (b: Book) => Promise<Card[]>;
+  cover: (b: Book) => Promise<string | null>;
+  known: (name: string) => boolean;
+  setLecture: (b: Book, lecture: string) => Promise<void>;
+  remove(b: Book): Promise<unknown>;
+  add: (d: NewBook) => Promise<string>;
+  search: (q: string) => Promise<OLDoc[]>;
+  description: (key: string) => Promise<string>;
+  open: (path: string) => Promise<void>;
+  openName: (name: string) => Promise<void>;
+  listen: <K extends keyof WindowEventMap>(t: Window, type: K, fn: (e: WindowEventMap[K]) => void, o?: boolean | AddEventListenerOptions) => void;
+  load: (key: string) => string | null;
+  save: (key: string, value: string) => void;
+  active: () => boolean;
+  onChange: (fn: () => void) => () => void;
+}

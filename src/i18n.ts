@@ -1,6 +1,31 @@
 /* Les mots de l'étagère, en français et en anglais. La langue est celle d'Obsidian. */
 
-const fr = {
+export type Status = 'a lire' | 'en cours' | 'lu';
+type Msg = (title: string) => string;
+export interface Words {
+  months: string[];
+  shelves: Record<string, string>;
+  all: string;
+  genres: Record<string, string>;
+  add: string; back: string; cancel: string; searchPh: string;
+  empty: Record<string, string>;
+  year: (y: number) => string;
+  when: Record<string, string>;
+  status: Record<string, string>;
+  foundVia: string;
+  cards: string; citations: string; cit: string; moreCards: (n: number) => string;
+  why: string; tropes: string; summary: string; check: string; themes: string; keywords: string;
+  openInVault: string; leadsTo: string;
+  rel: { before: string; next: string; foundHere: string; ledHere: string };
+  act: Record<string, string>;
+  toast: Record<Status | 'added' | 'removed', Msg> & { failed: string; notSaved: string };
+  searching: string; nothing: string; offline: string;
+  whyPh: string; from: string; fromPh: string;
+  tropesHint: string; put: string; other: string; preparing: string;
+  tropeList: string[];
+}
+
+const fr: Words = {
   months: ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'],
   shelves: { 'a lire': 'À lire', 'en cours': 'En cours', lu: 'Lus' },
   all: 'Tout',
@@ -27,7 +52,7 @@ const fr = {
     'Premier contact', 'Voyage dans le temps', 'Intelligence artificielle', 'Dystopie', 'Space opera', 'Post-apocalyptique', 'Seul survivant'],
 };
 
-const en = {
+const en: Words = {
   months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
   shelves: { 'a lire': 'To read', 'en cours': 'Reading', lu: 'Read' },
   all: 'All',
@@ -60,4 +85,4 @@ export const TROPE_HINTS = [/magic (school|academy)|academy|school of magic/, /c
   /court intrigue|political intrigue|royal court/, /rebellion|revolution/, /magic system/, /dragon/, /portal|parallel world/,
   /first contact|alien contact/, /time travel/, /artificial intelligence|\bai\b|robot/, /dystopi/, /space opera/, /post-?apocalyp/, /survival|sole survivor/];
 
-export const words = lang => (lang === 'fr' ? fr : en);
+export const words = (lang: string): Words => (lang === 'fr' ? fr : en);
